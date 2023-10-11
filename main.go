@@ -8,6 +8,10 @@ import (
 
 const port = "8080"
 
+type apiConfig struct {
+	fileServerHits int
+}
+
 func middlewareCors(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
@@ -25,7 +29,17 @@ func middlewareCors(next http.Handler) http.Handler {
 
 func main() {
 	mux := http.NewServeMux()
-	mux.Handle("/", http.FileServer(http.Dir("public")))
+	mux.Handle("/app/", http.StripPrefix("/app/", http.FileServer(http.Dir("public"))))
+
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+
+		_, err := w.Write([]byte("OK"))
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
+	})
 
 	corsMux := middlewareCors(mux)
 
