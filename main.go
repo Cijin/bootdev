@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bootdev/database"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -10,7 +11,10 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
-const port = "8080"
+const (
+	port   = "8080"
+	dbFile = "db.json"
+)
 
 type apiConfig struct {
 	fileServerHits int
@@ -81,6 +85,10 @@ func respondWithJSON(w http.ResponseWriter, code int, payload interface{}) {
 
 func main() {
 	apiCfg := new(apiConfig)
+	db, err := database.NewDb(dbFile)
+	if err != nil {
+		log.Panic(err)
+	}
 
 	router := chi.NewRouter()
 	fsHandler := apiCfg.middlewareMetricsInc(http.StripPrefix("/app", http.FileServer(http.Dir("public"))))
@@ -92,6 +100,7 @@ func main() {
 	apiRouter := chi.NewRouter()
 
 	apiRouter.HandleFunc("/reset", apiCfg.resetMetrics)
+
 	apiRouter.Get("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		w.WriteHeader(http.StatusOK)
@@ -101,23 +110,14 @@ func main() {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 		}
 	})
-	apiRouter.Post("/validate_chirp", func(w http.ResponseWriter, r *http.Request) {
-		type chirp struct {
-			Body string `json:"body"`
-		}
 
-		type resBody struct {
-			Valid       bool   `json:"valid,omitempty"`
-			CleanedBody string `json:"cleaned_body,omitempty"`
-		}
-
+	apiRouter.Post("/chirps", func(w http.ResponseWriter, r *http.Request) {
 		bannedWords := []string{"kerfuffle", "sharbert", "fornax"}
 		censor := "****"
 
 		decoder := json.NewDecoder(r.Body)
 
-		c := chirp{}
-		res := resBody{}
+		c := &database.Chirp{}
 
 		err := decoder.Decode(&c)
 		if err != nil {
@@ -138,9 +138,28 @@ func main() {
 				}
 			}
 		}
+		censoredText := strings.Join(words, " ")
 
-		res.CleanedBody = strings.Join(words, " ")
-		respondWithJSON(w, http.StatusOK, res)
+		chirp, err := db.CreateChirp(censoredText)
+		if err != nil {
+			respondWithError(w, http.StatusInternalServerError, "Something went wrong")
+			return
+		}
+
+		respondWithJSON(w, http.StatusCreated, chirp)
+
+		return
+	})
+
+	apiRouter.Get("/chirps", func(w http.ResponseWriter, r *http.Request) {
+		chirps, err := db.GetChirps()
+		if err != nil {
+			log.Print(err)
+			respondWithError(w, http.StatusInternalServerError, "Something went wrong")
+			return
+		}
+
+		respondWithJSON(w, http.StatusOK, chirps)
 	})
 
 	// admin
