@@ -20,11 +20,6 @@ type DbStructure struct {
 	Chirps map[int]Chirp `json:"chirps,omitempty"`
 }
 
-var (
-	id       int
-	dbStruct DbStructure = DbStructure{make(map[int]Chirp)}
-)
-
 // NewDb creates a new database connection
 // and creates the database file if it doesn't exist
 func NewDb(path string) (*Db, error) {
@@ -39,12 +34,24 @@ func NewDb(path string) (*Db, error) {
 
 // CreateChirp creates a new chirp and saves it to disk
 func (db *Db) CreateChirp(body string) (Chirp, error) {
-	id += 1
-	chirp := Chirp{id, body}
+	dbStruct, err := db.loadDB()
+	if err != nil {
+		return Chirp{}, err
+	}
 
+	id := len(dbStruct.Chirps) + 1
+	// nil map
+	if id-1 == 0 {
+		dbStruct.Chirps = map[int]Chirp{}
+	}
+
+	chirp := Chirp{
+		Id:   id,
+		Body: body,
+	}
 	dbStruct.Chirps[id] = chirp
 
-	err := db.writeDB(dbStruct)
+	err = db.writeDB(dbStruct)
 	if err != nil {
 		delete(dbStruct.Chirps, id)
 		id--
@@ -81,7 +88,8 @@ func (db *Db) ensureDB() error {
 		return err
 	}
 
-	return nil
+	dbStruct := DbStructure{make(map[int]Chirp)}
+	return db.writeDB(dbStruct)
 }
 
 // loadDB reads the database file into memory
