@@ -3,9 +3,11 @@ package main
 import (
 	"bootdev/database"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
@@ -147,8 +149,28 @@ func main() {
 		}
 
 		respondWithJSON(w, http.StatusCreated, chirp)
-
 		return
+	})
+
+	apiRouter.Get("/chirps/{id}", func(w http.ResponseWriter, r *http.Request) {
+		idParam := chi.URLParam(r, "id")
+		id, err := strconv.Atoi(idParam)
+		if err != nil {
+			respondWithError(w, http.StatusBadRequest, "Not a valid id")
+			return
+		}
+
+		c, err := db.GetChirp(id)
+		if err != nil {
+			if errors.Is(err, database.ErrNotFound) {
+				respondWithError(w, http.StatusNotFound, "Chirp does not exist")
+				return
+			}
+			respondWithError(w, http.StatusInternalServerError, "Something went wrong")
+			return
+		}
+
+		respondWithJSON(w, http.StatusOK, c)
 	})
 
 	apiRouter.Get("/chirps", func(w http.ResponseWriter, r *http.Request) {
@@ -160,6 +182,52 @@ func main() {
 		}
 
 		respondWithJSON(w, http.StatusOK, chirps)
+	})
+
+	apiRouter.Post("/users", func(w http.ResponseWriter, r *http.Request) {
+		decoder := json.NewDecoder(r.Body)
+
+		u := &database.User{}
+
+		err := decoder.Decode(&u)
+		if err != nil {
+			respondWithError(w, http.StatusInternalServerError, "Something went wrong")
+			return
+		}
+
+		user, err := db.CreateUser(u.Email, u.Password)
+		if err != nil {
+			if errors.Is(err, database.ErrDuplicateEmail) {
+				respondWithError(w, http.StatusUnauthorized, "User with email already exists")
+				return
+			}
+			respondWithError(w, http.StatusInternalServerError, "Something went wrong")
+			return
+		}
+
+		respondWithJSON(w, http.StatusCreated, user)
+		return
+	})
+
+	apiRouter.Post("/login", func(w http.ResponseWriter, r *http.Request) {
+		decoder := json.NewDecoder(r.Body)
+
+		u := &database.User{}
+
+		err := decoder.Decode(&u)
+		if err != nil {
+			respondWithError(w, http.StatusInternalServerError, "Something went wrong")
+			return
+		}
+
+		user, err := db.Login(u.Email, u.Password)
+		if err != nil {
+			respondWithError(w, http.StatusUnauthorized, "Unauthorized")
+			return
+		}
+
+		respondWithJSON(w, http.StatusOK, user)
+		return
 	})
 
 	// admin
