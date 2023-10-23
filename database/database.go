@@ -9,7 +9,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
-type Db struct {
+type DB struct {
 	path string
 	mux  *sync.RWMutex
 }
@@ -27,30 +27,37 @@ type User struct {
 }
 
 type DbStructure struct {
-	Chirps map[int]Chirp   `json:"chirps,omitempty"`
-	Users  map[string]User `json:"users,omitempty"`
+	Chirps map[int]Chirp `json:"chirps,omitempty"`
+	Users  map[int]User  `json:"users,omitempty"`
 }
 
 var (
 	ErrNotFound       = errors.New("not found")
 	ErrDuplicateEmail = errors.New("email exists")
 	ErrUnAuthorized   = errors.New("unauthorized")
+	dbInstance        = &DB{
+		"db.json",
+		&sync.RWMutex{},
+	}
 )
 
 // NewDb creates a new database connection
 // and creates the database file if it doesn't exist
-func NewDb(path string) (*Db, error) {
-	db := &Db{
-		path,
-		&sync.RWMutex{},
+func NewDb() error {
+	err := dbInstance.ensureDB()
+	if err != nil {
+		return err
 	}
 
-	err := db.ensureDB()
-	return db, err
+	return nil
+}
+
+func GetDb() *DB {
+	return dbInstance
 }
 
 // CreateChirp creates a new chirp and saves it to disk
-func (db *Db) CreateChirp(body string) (Chirp, error) {
+func (db *DB) CreateChirp(body string) (Chirp, error) {
 	dbStruct, err := db.loadDB()
 	if err != nil {
 		return Chirp{}, err
@@ -77,7 +84,7 @@ func (db *Db) CreateChirp(body string) (Chirp, error) {
 }
 
 // GetChirps returns all chirps in the database
-func (db *Db) GetChirps() ([]Chirp, error) {
+func (db *DB) GetChirps() ([]Chirp, error) {
 	ds, err := db.loadDB()
 	if err != nil {
 		return nil, err
@@ -91,7 +98,7 @@ func (db *Db) GetChirps() ([]Chirp, error) {
 	return chirps, nil
 }
 
-func (db *Db) GetChirp(id int) (Chirp, error) {
+func (db *DB) GetChirp(id int) (Chirp, error) {
 	ds, err := db.loadDB()
 	if err != nil {
 		return Chirp{}, err
@@ -105,20 +112,21 @@ func (db *Db) GetChirp(id int) (Chirp, error) {
 	return c, nil
 }
 
-func (db *Db) CreateUser(email string, password string) (User, error) {
+func (db *DB) CreateUser(email string, password string) (User, error) {
 	dbStruct, err := db.loadDB()
 	if err != nil {
 		return User{}, err
 	}
 
-	if _, ok := dbStruct.Users[email]; ok {
+	_, ok := db.search(email)
+	if ok {
 		return User{}, ErrDuplicateEmail
 	}
 
 	id := len(dbStruct.Users) + 1
 	// nil map
 	if id-1 == 0 {
-		dbStruct.Users = map[string]User{}
+		dbStruct.Users = map[int]User{}
 	}
 
 	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
@@ -131,7 +139,7 @@ func (db *Db) CreateUser(email string, password string) (User, error) {
 		Email:        email,
 		PasswordHash: hash,
 	}
-	dbStruct.Users[email] = u
+	dbStruct.Users[id] = u
 
 	err = db.writeDB(dbStruct)
 	if err != nil {
@@ -141,18 +149,47 @@ func (db *Db) CreateUser(email string, password string) (User, error) {
 	return User{Id: u.Id, Email: u.Email}, nil
 }
 
-func (db *Db) Login(email string, password string) (User, error) {
+func (db *DB) UpdateUser(id int, email string, password string) (User, error) {
 	dbStruct, err := db.loadDB()
 	if err != nil {
 		return User{}, err
 	}
 
-	u, ok := dbStruct.Users[email]
+	u, ok := dbStruct.Users[id]
 	if !ok {
 		return User{}, ErrNotFound
 	}
 
-	err = bcrypt.CompareHashAndPassword(u.PasswordHash, []byte(password))
+	if password != "" {
+		hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+		if err != nil {
+			return User{}, err
+		}
+
+		u.PasswordHash = hash
+	}
+
+	if email != "" {
+		u.Email = email
+	}
+
+	dbStruct.Users[id] = u
+
+	err = db.writeDB(dbStruct)
+	if err != nil {
+		return User{}, err
+	}
+
+	return User{Id: u.Id, Email: u.Email}, nil
+}
+
+func (db *DB) Login(email string, password string) (User, error) {
+	u, ok := db.search(email)
+	if !ok {
+		return User{}, ErrNotFound
+	}
+
+	err := bcrypt.CompareHashAndPassword(u.PasswordHash, []byte(password))
 	if err != nil {
 		return User{}, ErrUnAuthorized
 	}
@@ -161,7 +198,7 @@ func (db *Db) Login(email string, password string) (User, error) {
 }
 
 // ensureDB creates a new database file if it doesn't exist
-func (db *Db) ensureDB() error {
+func (db *DB) ensureDB() error {
 	_, err := os.Stat(db.path)
 	if os.IsNotExist(err) {
 		_, err = os.Create(db.path)
@@ -171,12 +208,12 @@ func (db *Db) ensureDB() error {
 		return err
 	}
 
-	dbStruct := DbStructure{make(map[int]Chirp), make(map[string]User)}
+	dbStruct := DbStructure{make(map[int]Chirp), make(map[int]User)}
 	return db.writeDB(dbStruct)
 }
 
 // loadDB reads the database file into memory
-func (db *Db) loadDB() (DbStructure, error) {
+func (db *DB) loadDB() (DbStructure, error) {
 	db.mux.RLock()
 	defer db.mux.RUnlock()
 
@@ -196,7 +233,7 @@ func (db *Db) loadDB() (DbStructure, error) {
 }
 
 // writeDB writes the database file to disk
-func (db *Db) writeDB(ds DbStructure) error {
+func (db *DB) writeDB(ds DbStructure) error {
 	db.mux.Lock()
 	defer db.mux.Unlock()
 
@@ -211,4 +248,20 @@ func (db *Db) writeDB(ds DbStructure) error {
 	}
 
 	return nil
+}
+
+// search
+func (db *DB) search(email string) (User, bool) {
+	dbStruct, err := db.loadDB()
+	if err != nil {
+		return User{}, false
+	}
+
+	for _, u := range dbStruct.Users {
+		if u.Email == email {
+			return u, true
+		}
+	}
+
+	return User{}, false
 }
