@@ -1,11 +1,11 @@
 package token
 
 import (
+	"bootdev/secrets"
 	"errors"
 	"fmt"
 	"log"
 	"net/http"
-	"os"
 	"strings"
 	"time"
 
@@ -13,21 +13,20 @@ import (
 )
 
 var (
-	jwtSecret               = []byte(os.Getenv("JWT_SECRET"))
+	keys                    = secrets.GetSecret()
+	jwtSecret               = keys.JwtSecret
+	apiKey                  = keys.ApiKey
 	ErrNoAuthHeaderIncluded = errors.New("not auth header included in request")
 )
 
-func CreateToken(expiry, id int) (string, error) {
+func CreateToken(expiry time.Duration, id int, issuer string) (string, error) {
 	now := time.Now()
-	expires := now.Add(24 * time.Hour)
-	if expiry > 0 && now.Add(time.Duration(expiry)*time.Second).Before(expires) {
-		expires = now.Add(time.Duration(expiry))
-	}
+	expires := now.Add(expiry)
 
 	// create token
 	t := jwt.NewWithClaims(jwt.SigningMethodHS256,
 		jwt.RegisteredClaims{
-			Issuer:    "chirpy",
+			Issuer:    issuer,
 			IssuedAt:  jwt.NewNumericDate(now),
 			ExpiresAt: jwt.NewNumericDate(expires),
 			Subject:   fmt.Sprintf("%d", id),
@@ -37,9 +36,9 @@ func CreateToken(expiry, id int) (string, error) {
 	return t.SignedString(jwtSecret)
 }
 
-func VerifyToken(acessToken string) (*jwt.Token, error) {
-	token, err := jwt.ParseWithClaims(
-		acessToken,
+func VerifyToken(token, issuerType string) (*jwt.Token, error) {
+	t, err := jwt.ParseWithClaims(
+		token,
 		&jwt.RegisteredClaims{},
 		func(token *jwt.Token) (interface{}, error) { return jwtSecret, nil },
 	)
@@ -48,11 +47,20 @@ func VerifyToken(acessToken string) (*jwt.Token, error) {
 		return &jwt.Token{}, err
 	}
 
-	if !token.Valid {
+	if !t.Valid {
+		return &jwt.Token{}, errors.New("token is not valid")
+	}
+
+	issuer, err := t.Claims.GetIssuer()
+	if err != nil {
 		return &jwt.Token{}, err
 	}
 
-	return token, nil
+	if issuer != issuerType {
+		return &jwt.Token{}, errors.New("invalid token type")
+	}
+
+	return t, nil
 }
 
 // GetBearerToken -
@@ -67,4 +75,18 @@ func GetBearerToken(headers http.Header) (string, error) {
 	}
 
 	return splitAuth[1], nil
+}
+
+// VerifyApiKey -
+func VerifyApiKey(headers http.Header) (bool, error) {
+	authHeader := headers.Get("Authorization")
+	if authHeader == "" {
+		return false, ErrNoAuthHeaderIncluded
+	}
+	splitAuth := strings.Split(authHeader, " ")
+	if len(splitAuth) < 2 || splitAuth[0] != "ApiKey" {
+		return false, errors.New("malformed authorization header")
+	}
+
+	return splitAuth[1] == apiKey, nil
 }

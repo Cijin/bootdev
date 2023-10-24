@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"sync"
+	"time"
 
 	"golang.org/x/crypto/bcrypt"
 )
@@ -15,20 +16,23 @@ type DB struct {
 }
 
 type Chirp struct {
-	Id   int    `json:"id,omitempty"`
-	Body string `json:"body,omitempty"`
+	Id       int    `json:"id,omitempty"`
+	AuthorId int    `json:"author_id,omitempty"`
+	Body     string `json:"body,omitempty"`
 }
 
 type User struct {
 	Id           int    `json:"id,omitempty"`
+	IsChirpyRed  bool   `json:"is_chirpy_red"`
 	Email        string `json:"email,omitempty"`
 	Password     string `json:"password,omitempty"`
 	PasswordHash []byte `json:"password_hash,omitempty"`
 }
 
 type DbStructure struct {
-	Chirps map[int]Chirp `json:"chirps,omitempty"`
-	Users  map[int]User  `json:"users,omitempty"`
+	Chirps        map[int]Chirp        `json:"chirps,omitempty"`
+	Users         map[int]User         `json:"users,omitempty"`
+	RevokedTokens map[string]time.Time `json:"revoked_tokens,omitempty"`
 }
 
 var (
@@ -57,7 +61,7 @@ func GetDb() *DB {
 }
 
 // CreateChirp creates a new chirp and saves it to disk
-func (db *DB) CreateChirp(body string) (Chirp, error) {
+func (db *DB) CreateChirp(authorId int, body string) (Chirp, error) {
 	dbStruct, err := db.loadDB()
 	if err != nil {
 		return Chirp{}, err
@@ -70,8 +74,9 @@ func (db *DB) CreateChirp(body string) (Chirp, error) {
 	}
 
 	chirp := Chirp{
-		Id:   id,
-		Body: body,
+		Id:       id,
+		AuthorId: authorId,
+		Body:     body,
 	}
 	dbStruct.Chirps[id] = chirp
 
@@ -112,6 +117,27 @@ func (db *DB) GetChirp(id int) (Chirp, error) {
 	return c, nil
 }
 
+func (db *DB) DeleteChirp(id int) (Chirp, error) {
+	ds, err := db.loadDB()
+	if err != nil {
+		return Chirp{}, err
+	}
+
+	c, ok := ds.Chirps[id]
+	if !ok {
+		return Chirp{}, ErrNotFound
+	}
+
+	delete(ds.Chirps, id)
+
+	err = db.writeDB(ds)
+	if err != nil {
+		return Chirp{}, err
+	}
+
+	return c, nil
+}
+
 func (db *DB) CreateUser(email string, password string) (User, error) {
 	dbStruct, err := db.loadDB()
 	if err != nil {
@@ -138,6 +164,7 @@ func (db *DB) CreateUser(email string, password string) (User, error) {
 		Id:           id,
 		Email:        email,
 		PasswordHash: hash,
+		IsChirpyRed:  false,
 	}
 	dbStruct.Users[id] = u
 
@@ -146,10 +173,10 @@ func (db *DB) CreateUser(email string, password string) (User, error) {
 		return User{}, err
 	}
 
-	return User{Id: u.Id, Email: u.Email}, nil
+	return User{Id: u.Id, Email: u.Email, IsChirpyRed: u.IsChirpyRed}, nil
 }
 
-func (db *DB) UpdateUser(id int, email string, password string) (User, error) {
+func (db *DB) UpdateUser(id int, email string, password string, isChirpyRed bool) (User, error) {
 	dbStruct, err := db.loadDB()
 	if err != nil {
 		return User{}, err
@@ -173,6 +200,10 @@ func (db *DB) UpdateUser(id int, email string, password string) (User, error) {
 		u.Email = email
 	}
 
+	if isChirpyRed {
+		u.IsChirpyRed = true
+	}
+
 	dbStruct.Users[id] = u
 
 	err = db.writeDB(dbStruct)
@@ -180,7 +211,7 @@ func (db *DB) UpdateUser(id int, email string, password string) (User, error) {
 		return User{}, err
 	}
 
-	return User{Id: u.Id, Email: u.Email}, nil
+	return User{Id: u.Id, Email: u.Email, IsChirpyRed: u.IsChirpyRed}, nil
 }
 
 func (db *DB) Login(email string, password string) (User, error) {
@@ -194,7 +225,35 @@ func (db *DB) Login(email string, password string) (User, error) {
 		return User{}, ErrUnAuthorized
 	}
 
-	return User{Id: u.Id, Email: u.Email}, nil
+	return User{Id: u.Id, Email: u.Email, IsChirpyRed: u.IsChirpyRed}, nil
+}
+
+func (db *DB) RevokeToken(token string) error {
+	dbStruct, err := db.loadDB()
+	if err != nil {
+		return err
+	}
+
+	size := len(dbStruct.RevokedTokens)
+	// nil map
+	if size == 0 {
+		dbStruct.RevokedTokens = map[string]time.Time{}
+	}
+
+	dbStruct.RevokedTokens[token] = time.Now()
+
+	return db.writeDB(dbStruct)
+}
+
+func (db *DB) IsRevoked(token string) (bool, error) {
+	dbStruct, err := db.loadDB()
+	if err != nil {
+		return false, err
+	}
+
+	_, ok := dbStruct.RevokedTokens[token]
+
+	return ok, nil
 }
 
 // ensureDB creates a new database file if it doesn't exist
@@ -208,7 +267,7 @@ func (db *DB) ensureDB() error {
 		return err
 	}
 
-	dbStruct := DbStructure{make(map[int]Chirp), make(map[int]User)}
+	dbStruct := DbStructure{make(map[int]Chirp), make(map[int]User), make(map[string]time.Time)}
 	return db.writeDB(dbStruct)
 }
 

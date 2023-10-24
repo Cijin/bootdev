@@ -8,23 +8,16 @@ import (
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/joho/godotenv"
 )
 
 const port = "8080"
 
 type apiConfig struct {
 	fileServerHits int
-	jwtSecret      string
 }
 
 func main() {
-	err := godotenv.Load()
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	err = database.NewDb()
+	err := database.NewDb()
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -46,11 +39,16 @@ func main() {
 	apiRouter.Post("/chirps", api.CreateChirp)
 	apiRouter.Get("/chirps/{id}", api.GetChirp)
 	apiRouter.Get("/chirps", api.GetChrips)
+	apiRouter.Delete("/chirps/{id}", api.DeleteChirp)
 
 	apiRouter.Post("/users", api.CreateUser)
 	apiRouter.Put("/users", api.UpdateUser)
 
 	apiRouter.Post("/login", api.Login)
+	apiRouter.Post("/refresh", api.RefreshToken)
+	apiRouter.Post("/revoke", api.RevokeToken)
+
+	apiRouter.Post("/polka/webhooks", api.UpgradeUser)
 
 	// admin
 	adminRouter := chi.NewRouter()
